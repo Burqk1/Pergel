@@ -1,0 +1,81 @@
+# Builds the Windows installer and publishes it as a GitHub release.
+# Runs when a version tag (v0.1.0, v0.2.0, ...) is pushed, or by hand from the Actions tab.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  EMSDK_VERSION: 6.0.12
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      EMSDK: C:\emsdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-emscripten
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The engine is built with Emscripten (see scripts/build-wasm.mjs).
+      - name: Cache Emscripten
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.EMSDK }}
+          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      - name: Install Emscripten
+        if: steps.emsdk-cache.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "%EMSDK%"
+          cd /d "%EMSDK%"
+          call emsdk.bat install %EMSDK_VERSION%
+          call emsdk.bat activate %EMSDK_VERSION%
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Build the engine (WebAssembly)
+        run: npm run wasm
+
+      - name: Build the app and publish the release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Pergel v__VERSION__
+          releaseBody: |
+            ## Download
+
+            **Windows:** download the `x64-setup.exe` file under **Assets** below and run it.
+
+            Windows SmartScreen may warn that the app is from an unknown publisher, because the
+            installer isn't code-signed yet. Choose **More info → Run anyway**.
+
+            After installing, connect Claude Code to the design you have open:
+
+            ```sh
+            claude mcp add --transport http pergel http://127.0.0.1:3855/mcp
+            ```
+
+            See the [README](https://github.com/${{ github.repository }}#readme) for features and setup.
+          releaseDraft: false
+          prerelease: false
