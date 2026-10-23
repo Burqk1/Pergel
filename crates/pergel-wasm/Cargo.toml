@@ -1,0 +1,19 @@
+[package]
+name = "pergel-wasm"
+description = "WebAssembly entry points for the Pergel canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+pergel-core = { workspace = true }
+pergel-render = { workspace = true }
+skia-safe = { workspace = true, features = ["gl", "textlayout"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+
+[build-dependencies]
+cc = "1"

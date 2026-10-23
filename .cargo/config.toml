@@ -1,0 +1,14 @@
+[target.wasm32-unknown-emscripten]
+rustflags = [
+  "-C", "link-arg=-sMODULARIZE=1",
+  "-C", "link-arg=-sEXPORT_ES6=1",
+  "-C", "link-arg=-sEXPORT_NAME=createPergel",
+  "-C", "link-arg=-sENVIRONMENT=web",
+  "-C", "link-arg=-sALLOW_MEMORY_GROWTH=1",
+  "-C", "link-arg=-sMAXIMUM_MEMORY=4GB",
+  "-C", "link-arg=-sMIN_WEBGL_VERSION=2",
+  "-C", "link-arg=-sMAX_WEBGL_VERSION=2",
+  "-C", "link-arg=-sSTACK_SIZE=1048576",
+  "-C", "link-arg=-sERROR_ON_UNDEFINED_SYMBOLS=0",
+  "-C", "link-arg=-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8",
+]

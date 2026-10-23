@@ -1,0 +1,16 @@
+[package]
+name = "pergel-core"
+description = "Scene graph, geometry and viewport for Pergel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+rstar = { workspace = true }
+taffy = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+usvg = { workspace = true }
+imagesize = { workspace = true }
+base64 = { workspace = true }
