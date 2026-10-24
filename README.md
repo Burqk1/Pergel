@@ -88,9 +88,13 @@ with the design pixel by pixel, and edit the design itself.
 
 ### Collaboration and files
 
-- **Live sessions** on the local network: other people's cursors with their names, and a
-  three-way merge per top-level frame. People editing different frames at the same time keep all of
-  their work.
+- **Live sessions** on the local network: other people's cursors with their names, and a merge per
+  top-level frame. People editing different frames at the same time keep all of their work; when two
+  change the same frame at once, everyone ends up with the later change, and work done while
+  disconnected merges in on rejoining the same link. Only the changed frames are sent, and Undo
+  reverts your own changes, not the others'. Click someone's avatar to follow their view (pages
+  included), or "Spotlight me" to have everyone follow yours. The link carries a random 128-bit
+  token.
 - **Comments:** threads pinned to layers or to the canvas, with replies and resolve. They are saved
   in the file.
 - **Branching:** create a branch, review its changes (added, changed or deleted frames), and merge
@@ -107,7 +111,9 @@ with the design pixel by pixel, and edit the design itself.
 - **Figma plugins:** import a plugin's folder (`manifest.json`, its main script and UI). Pergel
   provides a `figma` API (nodes and their properties, `create*`, `selection`, `findAll`, `showUI`
   with `pluginMessage`, `clientStorage`, `exportAsync`). Figma's own "Rectangle Creator" sample runs
-  unchanged; plugins that need parts of the API Pergel doesn't have yet won't.
+  unchanged; plugins that need parts of the API Pergel doesn't have yet won't. As in Figma, a
+  plugin's code runs in a separate JavaScript engine (QuickJS) with no access to the app, the disk
+  or the network, with capped memory and a time limit; its UI runs in a sandboxed iframe.
 
 ### Dev Mode features
 

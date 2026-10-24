@@ -464,7 +464,7 @@ impl Scene {
                     } else if spec.width.is_none() {
                         node.bounds.w = node.bounds.h * iw as f32 / ih.max(1) as f32;
                     }
-                    node.paint = Some(Box::new(Paint::Image(ImageFill { hash, mode, width: iw, height: ih, scale: 1.0, opacity: 1.0, adjust: Default::default() })));
+                    node.paint = Some(Box::new(Paint::Image(ImageFill { hash, mode, width: iw, height: ih, scale: 1.0, opacity: 1.0, adjust: Default::default(), flip: [false, false] })));
                     node.fill_on = true;
                     if spec.name.is_none() {
                         node.name = "Image".into();

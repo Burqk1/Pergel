@@ -55,15 +55,30 @@
     <ul class="people">
       <li><span class="swatch" style="background:{live.color}"></span>{live.name} <span class="faint">(you)</span></li>
       {#each peers as p (p.id)}
-        <li><span class="swatch" style="background:{p.color}"></span>{p.name}</li>
+        <li>
+          <span class="swatch" style="background:{p.color}"></span>{p.name}
+          <button class="link" onclick={() => live.toggleFollow(p.id)}>{live.following === p.id ? "Stop following" : "Follow"}</button>
+        </li>
       {/each}
     </ul>
+    {#if peers.length}
+      <button class="ghost" onclick={() => live.toggleSpotlight()}>{live.spotlighting ? "Stop spotlight" : "Spotlight me"}</button>
+    {/if}
     <button class="ghost" onclick={() => live.disconnect()}>{live.hosting ? "Stop sharing" : "Leave session"}</button>
   {/if}
   {#if live.error}<p class="error">{live.error}</p>{/if}
 </div>
 
 <style>
+  .link {
+    margin-left: auto;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--brand, #0d99ff);
+    font-size: 11px;
+    cursor: pointer;
+  }
   .share-panel {
     position: absolute;
     top: 44px;

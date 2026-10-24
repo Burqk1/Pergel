@@ -40,6 +40,8 @@ class Editor {
   systemFamilies = $state.raw<SystemFamily[]>([]);
   /** The Comment tool asked for an annotation on the selected layer. */
   annotating = $state(false);
+  /** In a live session: undo and redo of this person's own changes (see live.svelte.ts). */
+  liveHistory = $state.raw<{ undo(): boolean; redo(): boolean; readonly canUndo: boolean; readonly canRedo: boolean } | null>(null);
   /** Rulers visible (Shift+R). */
   showRulers = $state(false);
   /** Layout guides visible (Shift+G). */
@@ -259,13 +261,23 @@ class Editor {
   }
 
   undo() {
-    if (this.engine && !this.engine.undo()) this.notify("Nothing to undo");
+    const done = this.liveHistory ? this.liveHistory.undo() : this.engine?.undo();
+    if (this.engine && !done) this.notify("Nothing to undo");
     this.refreshAll();
   }
 
   redo() {
-    if (this.engine && !this.engine.redo()) this.notify("Nothing to redo");
+    const done = this.liveHistory ? this.liveHistory.redo() : this.engine?.redo();
+    if (this.engine && !done) this.notify("Nothing to redo");
     this.refreshAll();
+  }
+
+  get canUndo() {
+    return this.liveHistory ? this.liveHistory.canUndo : this.view.undo;
+  }
+
+  get canRedo() {
+    return this.liveHistory ? this.liveHistory.canRedo : this.view.redo;
   }
 
   group(frame = false) {

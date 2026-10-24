@@ -114,6 +114,13 @@ pub struct ImageFill {
     /// Exposure, contrast, saturation… (Figma's image adjustments).
     #[serde(default, skip_serializing_if = "ImageAdjust::is_none")]
     pub adjust: ImageAdjust,
+    /// Mirrored horizontally, vertically (the layer was flipped).
+    #[serde(default, skip_serializing_if = "unflipped")]
+    pub flip: [bool; 2],
+}
+
+fn unflipped(flip: &[bool; 2]) -> bool {
+    !flip[0] && !flip[1]
 }
 
 /// An extra fill painted above a layer's own fill (Figma's fill list).
@@ -404,10 +411,11 @@ impl ShapeTool {
     /// The outline for a `w`×`h` box.
     pub fn path(self, w: f32, h: f32) -> VectorPath {
         let p = |x: f32, y: f32| format!("{} {}", fmt(x), fmt(y));
-        let (a, b) = |down: bool| -> ((f32, f32), (f32, f32)) { if down { ((0.0, 0.0), (w, h)) } else { ((0.0, h), (w, 0.0)) } }(match self {
+        let down = match self {
             ShapeTool::Line { down } | ShapeTool::Arrow { down } => down,
             _ => true,
-        });
+        };
+        let (a, b) = if down { ((0.0, 0.0), (w, h)) } else { ((0.0, h), (w, 0.0)) };
         let d = match self {
             ShapeTool::Line { .. } => format!("M{}L{}", p(a.0, a.1), p(b.0, b.1)),
             // An arrow is a line whose end point is a line arrowhead, as in Figma.

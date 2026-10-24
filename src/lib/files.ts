@@ -147,20 +147,27 @@ export const versions = {
   read: (id: string, time: number): Promise<string> => invoke<string>("file_version_read", { id, time }),
 };
 
+/** A file dialog (desktop only). The app reads and writes disk only where the user pointed one,
+ *  so these paths are the only ones `file_import`, `file_export` and `write_file` accept. */
+export function pickPath(
+  kind: "open" | "save" | "folder",
+  options: { defaultName?: string; filterName?: string; extensions?: string[]; title?: string } = {},
+): Promise<string | null> {
+  return invoke<string | null>("pick_path", { kind, ...options });
+}
+
 /** Picks a `.pergel` file on disk and copies it into the store (desktop only). */
 export async function importFromDisk(): Promise<FileMeta | null> {
   if (!isTauri()) return null;
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const path = await open({ multiple: false, filters: [{ name: "Pergel file", extensions: ["pergel"] }] });
-  if (typeof path !== "string") return null;
+  const path = await pickPath("open", { filterName: "Pergel file", extensions: ["pergel"] });
+  if (!path) return null;
   return invoke<FileMeta>("file_import", { path });
 }
 
 /** Saves a stored file to a place on disk the user picks (desktop only). */
 export async function exportToDisk(meta: FileMeta): Promise<boolean> {
   if (!isTauri()) return false;
-  const { save } = await import("@tauri-apps/plugin-dialog");
-  const path = await save({ defaultPath: `${meta.name}.pergel`, filters: [{ name: "Pergel file", extensions: ["pergel"] }] });
+  const path = await pickPath("save", { defaultName: `${meta.name}.pergel`, filterName: "Pergel file", extensions: ["pergel"] });
   if (!path) return false;
   await invoke("file_export", { id: meta.id, path });
   return true;
@@ -169,8 +176,7 @@ export async function exportToDisk(meta: FileMeta): Promise<boolean> {
 /** Saves bytes (base64) or text to a path the user picks (desktop), or downloads it (browser). */
 export async function saveAs(name: string, ext: string, data: { base64?: string; text?: string }): Promise<boolean> {
   if (isTauri()) {
-    const { save } = await import("@tauri-apps/plugin-dialog");
-    const path = await save({ defaultPath: `${name}.${ext}`, filters: [{ name: ext.toUpperCase(), extensions: [ext] }] });
+    const path = await pickPath("save", { defaultName: `${name}.${ext}`, filterName: ext.toUpperCase(), extensions: [ext] });
     if (!path) return false;
     await invoke("write_file", { path, base64: data.base64 ?? null, text: data.text ?? null });
     return true;

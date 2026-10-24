@@ -32,11 +32,11 @@ const env = {
   PATH: [...paths, process.env.PATH].join(sep),
 };
 
-const profile = release ? "release" : "debug";
+const profile = release ? "wasm-release" : "debug";
 const cargo = process.platform === "win32" ? "cargo.exe" : "cargo";
 execFileSync(
   cargo,
-  ["build", "-p", "pergel-wasm", "--target", "wasm32-unknown-emscripten", ...(release ? ["--release"] : [])],
+  ["build", "-p", "pergel-wasm", "--target", "wasm32-unknown-emscripten", ...(release ? ["--profile", "wasm-release"] : [])],
   { cwd: root, env, stdio: "inherit" },
 );
 

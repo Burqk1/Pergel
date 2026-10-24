@@ -21,7 +21,7 @@ its MCP server lists, and the measurements below. No Figma file was edited.
 | Variables with modes, styles (text, colour, effect) | ✓ | ✓ |
 | Prototyping: navigate, back, URL, transitions, scroll, interactive components | ✓ | ✓ |
 | Prototyping: overlays, conditionals and variables in prototypes | ✓ | ✓ (no video) |
-| Multiplayer | ✓ (cloud, per-property merge) | ◐ (LAN live session: cursors, three-way merge per top-level layer) |
+| Multiplayer | ✓ (cloud, per-property merge) | ◐ (LAN live session: cursors, follow and spotlight, merge per top-level layer by last change, per-person undo) |
 | Comments, branching, team libraries | ✓ | ✓ (libraries shared on one computer; comments sync in live sessions) |
 | Cloud files and accounts | ✓ | ✗ (local files, version history) |
 | Plugins | ✓ (Figma plugin API, community) | ◐ (own `pergel` API, and Figma plugins that use the supported API subset) |

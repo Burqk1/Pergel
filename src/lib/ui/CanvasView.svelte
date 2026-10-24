@@ -8,6 +8,7 @@
   import Rulers from "./Rulers.svelte";
   import Measure from "./Measure.svelte";
   import LiveCursors from "./LiveCursors.svelte";
+  import FollowFrame from "./FollowFrame.svelte";
   import CommentPins from "./CommentPins.svelte";
   import { live } from "../live.svelte";
   import { runTool, startMcpBridge } from "../mcp";
@@ -80,8 +81,17 @@
     editor.invalidate();
   }
 
+  let panics = 0;
+
   function frame(now: number) {
     const engine = editor.engine;
+    // A bug inside the engine is caught there and its change rolled back; say so.
+    if (engine && engine.panics() !== panics) {
+      panics = engine.panics();
+      editor.notify(`Something went wrong and the last change was undone (${engine.lastPanic()})`);
+      editor.refreshAll();
+      editor.invalidate();
+    }
     if (engine && (editor.dirty || editor.benchmarking)) {
       const t = performance.now();
       const drawn = engine.render();
@@ -596,6 +606,7 @@
   {#if editor.showRulers}<Rulers width={stageW} height={stageH} />{/if}
   <Measure target={measureTarget} />
   <LiveCursors />
+  <FollowFrame />
   <CommentPins />
   <canvas
     id="pergel-canvas"

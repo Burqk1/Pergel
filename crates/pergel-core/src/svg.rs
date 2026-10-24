@@ -416,9 +416,17 @@ impl Svg<'_> {
             );
             let _ = write!(op, " filter=\"url(#{fid})\"");
         }
+        // A flipped image is mirrored inside the (unmirrored) clip.
+        let mirror = if img.flip[0] || img.flip[1] {
+            let (cx, cy) = b.center();
+            let (sx, sy) = (if img.flip[0] { -1.0 } else { 1.0 }, if img.flip[1] { -1.0 } else { 1.0 });
+            format!(" transform=\"translate({} {}) scale({} {}) translate({} {})\"", n(cx), n(cy), n(sx), n(sy), n(-cx), n(-cy))
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             self.body,
-            "{pad}<image clip-path=\"url(#{id})\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"{aspect}\"{op} href=\"data:{mime};base64,{data}\" />",
+            "{pad}<g clip-path=\"url(#{id})\"><image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"{aspect}\"{op}{mirror} href=\"data:{mime};base64,{data}\" /></g>",
             n(b.x),
             n(b.y),
             n(b.w),

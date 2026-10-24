@@ -579,6 +579,7 @@ fn apply_paint(t: &mut Tree, p: &Value, bounds: Rect, ctx: &mut Ctx) {
                             highlights: f(fl, "highlights").unwrap_or(0.0),
                             shadows: f(fl, "shadows").unwrap_or(0.0),
                         }).unwrap_or_default(),
+                        flip: [false, false],
                     }))
                 }
                 None => ctx.report.missing_images += 1,

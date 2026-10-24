@@ -64,7 +64,13 @@
   <div class="top">
     <span class="avatar" title="You">B</span>
     {#each Object.values(live.peers) as p (p.id)}
-      <span class="avatar peer" title={p.name} style="background:{p.color}">{p.name.slice(0, 1).toUpperCase()}</span>
+      <button
+        class="avatar peer"
+        class:following={live.following === p.id}
+        title={live.following === p.id ? `Stop following ${p.name}` : `Follow ${p.name}`}
+        style="background:{p.color}; --ring:{p.color}"
+        onclick={() => live.toggleFollow(p.id)}>{p.name.slice(0, 1).toUpperCase()}</button
+      >
     {/each}
     <span class="spacer"></span>
     <button class="present" title="Present (Ctrl+Alt+Enter)" onclick={() => editor.present()}>
@@ -240,9 +246,19 @@
   }
   .avatar.peer {
     margin-left: -6px;
+    padding: 0;
+    border: none;
     box-shadow: 0 0 0 2px var(--panel-bg, #2c2c2c);
     color: #fff;
     font-size: 11px;
+    cursor: pointer;
+  }
+  .avatar.peer.following {
+    position: relative;
+    z-index: 1;
+    box-shadow:
+      0 0 0 2px var(--panel-bg, #2c2c2c),
+      0 0 0 4px var(--ring);
   }
   .share.live {
     background: #14ae5c;

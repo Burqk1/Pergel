@@ -202,7 +202,7 @@ impl Scene {
         if looks_like_icon(&n.name) && (shapes > 0 || !vectors.is_empty()) {
             return Some(kind);
         }
-        let Some(union) = crate::Rect::union_all(vectors.iter().copied()) else { return None };
+        let union = crate::Rect::union_all(vectors.iter().copied())?;
         // A plain wrapper (no fill, stroke or effects) around artwork is the artwork; a styled
         // box (a toolbar, a button) only when the artwork fills most of it.
         let styled = (n.fill_on && (n.paint.is_some() || n.fill.argb() >> 24 != 0)) || n.stroke.is_some() || !n.effects.is_empty();
@@ -259,7 +259,7 @@ mod tests {
         let (hash, w, h) = scene.images.add(png.to_vec()).unwrap();
         assert_eq!((w, h), (2, 3));
         let photo = scene.insert(rect("Hero photo", 0.0, 400.0, 400.0, 200.0), Some(page), None);
-        scene.update(photo, |n| n.paint = Some(Box::new(Paint::Image(crate::ImageFill { hash, mode: crate::ImageMode::Fill, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default() }))));
+        scene.update(photo, |n| n.paint = Some(Box::new(Paint::Image(crate::ImageFill { hash, mode: crate::ImageMode::Fill, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default(), flip: [false, false] }))));
         scene.insert(rect("Plain box", 0.0, 0.0, 10.0, 10.0), Some(page), None);
 
         let assets = scene.find_assets(page);

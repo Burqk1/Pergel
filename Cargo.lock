@@ -2487,12 +2487,13 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pergel"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "base64 0.22.1",
  "fontdb",
  "futures-util",
+ "getrandom 0.3.4",
  "rmcp",
  "schemars 1.2.3",
  "serde",
@@ -2506,7 +2507,7 @@ dependencies = [
 
 [[package]]
 name = "pergel-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "imagesize 0.14.0",
@@ -2519,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "pergel-render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pergel-core",
  "serde",
@@ -2528,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "pergel-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "cc",

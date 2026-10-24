@@ -4,7 +4,7 @@ members = ["crates/pergel-core", "crates/pergel-render", "crates/pergel-wasm", "
 default-members = ["crates/pergel-core", "src-tauri"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "MIT"
 authors = ["Burqk1"]
@@ -27,6 +27,12 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# The engine (WebAssembly) unwinds on panic, so a bug in one call is caught there instead of
+# stopping the canvas (`with_engine` in pergel-wasm); `npm run wasm` builds with this profile.
+[profile.wasm-release]
+inherits = "release"
+panic = "unwind"
 
 [profile.dev]
 debug = false

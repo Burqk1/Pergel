@@ -39,7 +39,7 @@ pub use prototype::{Action, Hotspot, Reaction, Transition, Trigger};
 pub use prototype::{OverlayPosition, Scroll};
 pub use diagram::mermaid_spec;
 pub use comments::{Comment, CommentThread, LibraryRef, PageComment};
-pub use merge::{diff_documents, merge_documents};
+pub use merge::{Patch, Stamp, Stamps, apply_patch, diff_documents, diff_parts, merge_documents, merge_stamped, revert_patch, stamp_changes};
 pub use component_props::{ComponentProp, PropKind, PropRefs, PropValue, new_prop_id};
 pub use paint::{Cap, EndPoint, FillLayer, Gradient, GradientKind, ImageAdjust, ImageFill, ImageMode, Images, Join, Paint, ShapeTool, Stop, VectorPath, content_hash, image_extension, map_path};
 pub use import::{SvgImport, import_svg};

@@ -24,6 +24,7 @@ schemars = "1"
 base64 = "0.22"
 tauri-plugin-dialog = "2"
 fontdb = { version = "0.24", default-features = false, features = ["fs", "memmap"] }
+getrandom = "0.3"
 
 [dev-dependencies]
 tokio-tungstenite = "0.29"

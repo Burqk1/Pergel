@@ -25,6 +25,8 @@ use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
+use crate::access::{Access, Use};
+
 pub const PORT: u16 = 3855;
 const TIMEOUT: Duration = Duration::from_secs(45);
 
@@ -35,6 +37,8 @@ pub struct Bridge {
     next: AtomicU64,
     /// Asset files served at /assets/<file> (mime type, bytes), from the last design reads.
     assets: Mutex<HashMap<String, (String, Vec<u8>)>>,
+    /// Folders agents may read and write.
+    access: Access,
 }
 
 #[derive(Clone, Serialize)]
@@ -46,16 +50,14 @@ pub struct Status {
 
 impl Bridge {
     pub fn new(app: AppHandle) -> Self {
-        Self { app, pending: Mutex::new(HashMap::new()), next: AtomicU64::new(1), assets: Mutex::new(HashMap::new()) }
+        let access = Access::new(app.clone());
+        Self { app, pending: Mutex::new(HashMap::new()), next: AtomicU64::new(1), assets: Mutex::new(HashMap::new()), access }
     }
 
     async fn call(&self, tool: &str, args: Value) -> Result<Value, String> {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().map_err(|e| e.to_string())?.insert(id, tx);
-        self.app
-            .emit_to("main", "mcp-request", json!({ "id": id, "tool": tool, "args": &args }))
-            .map_err(|e| format!("Pergel's window is not available: {e}"))?;
         // Scripts set their own limit (up to 5 minutes); everything else answers quickly.
         let limit = if tool == "import_figma" {
             Duration::from_secs(300)
@@ -65,11 +67,17 @@ impl Bridge {
         } else {
             TIMEOUT
         };
+        // The window runs calls one at a time; one still queued when this side gives up is
+        // skipped there instead of running late.
+        let wait = limit.as_millis() as u64;
+        self.app
+            .emit_to("main", "mcp-request", json!({ "id": id, "tool": tool, "args": &args, "timeoutMs": wait }))
+            .map_err(|e| format!("Pergel's window is not available: {e}"))?;
         let reply = match tokio::time::timeout(limit, rx).await {
             Ok(Ok(reply)) => reply,
             _ => {
                 self.pending.lock().ok().map(|mut p| p.remove(&id));
-                return Err("Pergel did not answer in time. Is a document open in the Pergel window?".into());
+                return Err("Pergel did not answer in time, so the call may still have run. Check the document (get_metadata) before retrying. Is a document open in the Pergel window?".into());
             }
         };
         if reply.get("ok").and_then(Value::as_bool) == Some(true) {
@@ -242,7 +250,7 @@ impl PergelMcp {
     #[prompt(name = "implement_design", description = "Implement the selected Pergel design in this codebase exactly: real asset files, tokens, codebase components, then verify against the design.")]
     async fn implement_design(&self, Parameters(a): Parameters<ImplementPromptArgs>) -> Vec<PromptMessage> {
         let target = a.node_id.map_or("the layer selected in Pergel".to_string(), |id| format!("Pergel layer {id}"));
-        let assets = a.assets_dir.map_or("the folder this project serves static files from (e.g. public/assets)".to_string(), |d| d);
+        let assets = a.assets_dir.unwrap_or_else(|| "the folder this project serves static files from (e.g. public/assets)".to_string());
         let fw = a.framework.unwrap_or_else(|| "react".into());
         vec![PromptMessage::new_text(
             Role::User,
@@ -307,6 +315,11 @@ impl PergelMcp {
         let mut written = Vec::new();
         for a in list {
             let (Some(file), Some(data)) = (a["file"].as_str(), a["data"].as_str()) else { continue };
+            // Names come from layer names: a bare file name only, never a path out of `dir`.
+            let mut parts = Path::new(file).components();
+            if !matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None)) {
+                return Err(format!("{file:?} is not a plain file name"));
+            }
             let bytes = B64.decode(data).map_err(|e| e.to_string())?;
             let path = dir.join(file);
             if path.exists() && !overwrite && std::fs::read(&path).ok().as_deref() != Some(&bytes[..]) {
@@ -335,19 +348,35 @@ impl PergelMcp {
         }
     }
 
-    /// Resolves local files in node specs (image `src`/`path`, svg `path`) before they reach
-    /// the editor; remote URLs and icon ids are fetched by the editor window.
-    fn resolve_files(spec: &mut Value) -> Result<(), String> {
+    /// A spec's local file (image `src`/`path`, svg `path`); remote URLs and icon ids are
+    /// fetched by the editor window.
+    fn local_file(spec: &Value) -> Option<String> {
+        let local = |v: &Value| v.as_str().filter(|s| !s.starts_with("http://") && !s.starts_with("https://") && !s.starts_with("data:")).map(str::to_string);
+        local(&spec["path"]).or_else(|| local(&spec["src"]))
+    }
+
+    /// Every local file in node specs, in order.
+    fn local_files(spec: &Value, out: &mut Vec<String>) {
+        if let Some(children) = spec.get("children").and_then(Value::as_array) {
+            for c in children {
+                Self::local_files(c, out);
+            }
+        }
+        out.extend(Self::local_file(spec));
+    }
+
+    /// Reads the local files in node specs into them before they reach the editor. `allowed`
+    /// maps each path to where it resolved once the user allowed its folder.
+    fn resolve_files(spec: &mut Value, allowed: &HashMap<String, PathBuf>) -> Result<(), String> {
         if let Some(children) = spec.get_mut("children").and_then(Value::as_array_mut) {
             for c in children {
-                Self::resolve_files(c)?;
+                Self::resolve_files(c, allowed)?;
             }
         }
         let kind = spec["type"].as_str().unwrap_or("").to_ascii_lowercase();
-        let local = |v: &Value| v.as_str().filter(|s| !s.starts_with("http://") && !s.starts_with("https://") && !s.starts_with("data:")).map(PathBuf::from);
-        let path = local(&spec["path"]).or_else(|| local(&spec["src"]));
-        let Some(path) = path else { return Ok(()) };
-        let bytes = std::fs::read(&path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        let Some(given) = Self::local_file(spec) else { return Ok(()) };
+        let path = allowed.get(&given).ok_or_else(|| format!("{given} was not checked"))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
         let is_svg = kind == "svg" || path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg"));
         if is_svg {
             spec["svg"] = json!(String::from_utf8_lossy(&bytes));
@@ -618,7 +647,13 @@ impl PergelMcp {
         description = "Everything needed to implement a layer exactly, in one call: implementation rules, the design's assets (icons, logos, illustrations and images as real SVG/PNG/JPG files — use them, never redraw them), reference React + Tailwind (or HTML + CSS) code with exact values that already references those files, a screenshot, the layer tree, fonts, reused components, all text strings and design tokens. Pass assets_dir to write the asset files straight into the project."
     )]
     async fn get_design_context(&self, Parameters(a): Parameters<DesignArgs>) -> Result<CallToolResult, ErrorData> {
-        let dir = a.assets_dir.as_deref().map(PathBuf::from);
+        let dir = match a.assets_dir.as_deref() {
+            Some(d) => match self.bridge.access.check(Path::new(d), Use::Write).await {
+                Ok(d) => Some(d),
+                Err(e) => return failure(e),
+            },
+            None => None,
+        };
         let base = match (&dir, &a.assets_url) {
             (_, Some(url)) => if url.ends_with('/') { url.clone() } else { format!("{url}/") },
             (Some(d), None) => url_for_dir(d),
@@ -740,6 +775,10 @@ impl PergelMcp {
         description = "Writes a layer's assets — icons, logos and illustrations as SVG, image fills as their original PNG/JPG/GIF/WebP — into a folder of the user's project, named as get_design_context references them. Returns the paths."
     )]
     async fn download_assets(&self, Parameters(a): Parameters<AssetsArgs>) -> Result<CallToolResult, ErrorData> {
+        let dir = match self.bridge.access.check(Path::new(&a.dir), Use::Write).await {
+            Ok(d) => d,
+            Err(e) => return failure(e),
+        };
         let v = match self.bridge.call("get_assets", json!({ "nodeId": a.node_id })).await {
             Ok(v) => v,
             Err(e) => return failure(e),
@@ -748,7 +787,7 @@ impl PergelMcp {
         if assets.is_empty() {
             return text("This layer has no icons or images; nothing to download.");
         }
-        let written = match Self::write_assets(Path::new(&a.dir), &assets, a.overwrite.unwrap_or(false)) {
+        let written = match Self::write_assets(&dir, &assets, a.overwrite.unwrap_or(false)) {
             Ok(w) => w,
             Err(e) => return failure(e),
         };
@@ -756,7 +795,7 @@ impl PergelMcp {
         text(format!(
             "Wrote {} file(s); reference them with the prefix {}:\n{}\n\nAssets:\n```json\n{}\n```",
             written.len(),
-            url_for_dir(Path::new(&a.dir)),
+            url_for_dir(&dir),
             written.iter().map(|w| format!("- {w}")).collect::<Vec<_>>().join("\n"),
             pretty(&json!(assets))
         ))
@@ -767,9 +806,12 @@ impl PergelMcp {
     )]
     async fn compare_to_design(&self, Parameters(a): Parameters<CompareArgs>) -> Result<CallToolResult, ErrorData> {
         let image = match (&a.image_path, &a.image_base64) {
-            (Some(p), _) => match std::fs::read(p) {
-                Ok(b) => B64.encode(b),
-                Err(e) => return failure(format!("Could not read {p}: {e}")),
+            (Some(p), _) => match self.bridge.access.check(Path::new(p), Use::Read).await {
+                Ok(path) => match std::fs::read(&path) {
+                    Ok(b) => B64.encode(b),
+                    Err(e) => return failure(format!("Could not read {p}: {e}")),
+                },
+                Err(e) => return failure(e),
             },
             (None, Some(b)) => b.trim().trim_start_matches("data:image/png;base64,").to_string(),
             (None, None) => return failure("Pass image_path (a screenshot file) or image_base64".into()),
@@ -844,7 +886,7 @@ impl PergelMcp {
     }
 
     #[tool(
-        description = "Runs JavaScript against the document (like Figma's use_figma) — for bulk or computed edits that would take many tool calls. Runs sandboxed in a worker; the whole run is one undo step. API (all async): pergel.selection(), pergel.metadata(id?), pergel.node(id), pergel.create(nodeSpecs, parentId?) → created layers, pergel.update(id, props), pergel.remove(ids), pergel.select(ids), pergel.designContext(id?), pergel.searchIcons(query), pergel.variables(), pergel.notify(text), pergel.tool(name, args) for any other tool; console.log output is returned. Example: const s = await pergel.selection(); for (const n of s.selection) await pergel.update(n.id, { radius: 12 }); return s.selection.length;"
+        description = "Runs JavaScript against the document (like Figma's use_figma) — for bulk or computed edits that would take many tool calls. Runs sandboxed in a worker; the whole run is one undo step, and a script that throws or times out changes nothing. API (all async): pergel.selection(), pergel.metadata(id?), pergel.node(id), pergel.create(nodeSpecs, parentId?) → created layers, pergel.update(id, props), pergel.remove(ids), pergel.select(ids), pergel.designContext(id?), pergel.searchIcons(query), pergel.variables(), pergel.notify(text), pergel.tool(name, args) for any other tool; console.log output is returned. Example: const s = await pergel.selection(); for (const n of s.selection) await pergel.update(n.id, { radius: 12 }); return s.selection.length;"
     )]
     async fn run_script(&self, Parameters(a): Parameters<ScriptArgs>) -> Result<CallToolResult, ErrorData> {
         self.json_tool("run_script", json!({ "code": a.code, "timeoutMs": a.timeout_ms })).await
@@ -854,10 +896,14 @@ impl PergelMcp {
         description = "Suggests Code Connect mappings: scans the codebase for UI components (React/Preact, Vue, Svelte — including class-variance-authority variants) and matches them to the file's main components and component sets by name, with variant → prop mappings. Review, then call add_code_connect_map with each suggestion you accept; get_design_context will then emit those components instead of raw markup."
     )]
     async fn get_code_connect_suggestions(&self, Parameters(a): Parameters<SuggestArgs>) -> Result<CallToolResult, ErrorData> {
-        let root = Path::new(&a.project_dir);
-        if !root.is_dir() {
+        if !Path::new(&a.project_dir).is_dir() {
             return failure(format!("{} is not a folder", a.project_dir));
         }
+        let root = match self.bridge.access.check(Path::new(&a.project_dir), Use::Scan).await {
+            Ok(r) => r,
+            Err(e) => return failure(e),
+        };
+        let root = root.as_path();
         let design = match self.bridge.call("get_components", json!({})).await {
             Ok(v) => v,
             Err(e) => return failure(e),
@@ -945,8 +991,19 @@ impl PergelMcp {
     #[tool(description = "Creates layers from node specs (one undo step) and selects them. Returns the new ids. Use real icons (type icon), SVG files and images instead of approximating artwork with shapes.\n\nNODE_SPEC")]
     async fn create_nodes(&self, Parameters(a): Parameters<CreateArgs>) -> Result<CallToolResult, ErrorData> {
         let mut nodes = a.nodes;
+        let mut files = Vec::new();
+        for n in &nodes {
+            Self::local_files(n, &mut files);
+        }
+        let mut allowed = HashMap::new();
+        for f in files {
+            match self.bridge.access.check(Path::new(&f), Use::Read).await {
+                Ok(p) => allowed.insert(f, p),
+                Err(e) => return failure(e),
+            };
+        }
         for n in &mut nodes {
-            if let Err(e) = Self::resolve_files(n) {
+            if let Err(e) = Self::resolve_files(n, &allowed) {
                 return failure(e);
             }
         }
@@ -1000,14 +1057,27 @@ impl ServerHandler for PergelMcp {
     }
 }
 
-async fn serve_asset(State(bridge): State<Arc<Bridge>>, AxumPath(file): AxumPath<String>) -> axum::response::Response {
+/// Whether a request's Host header names this machine. Web pages on other origins can't read
+/// the assets (no CORS header), and a page that rebinds its own domain to 127.0.0.1 still sends
+/// its domain as the Host, so it is turned away too.
+fn local_host(headers: &axum::http::HeaderMap) -> bool {
+    let Some(host) = headers.get(axum::http::header::HOST).and_then(|h| h.to_str().ok()) else { return false };
+    let name = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+    };
+    matches!(name.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
+}
+
+async fn serve_asset(State(bridge): State<Arc<Bridge>>, AxumPath(file): AxumPath<String>, headers: axum::http::HeaderMap) -> axum::response::Response {
     use axum::http::{StatusCode, header};
     use axum::response::IntoResponse;
+    if !local_host(&headers) {
+        return (StatusCode::FORBIDDEN, "Assets are only served to this machine").into_response();
+    }
     let found = bridge.assets.lock().ok().and_then(|c| c.get(&file).cloned());
     match found {
-        Some((mime, bytes)) => {
-            ([(header::CONTENT_TYPE, mime), (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*".to_string()), (header::CACHE_CONTROL, "no-cache".to_string())], bytes).into_response()
-        }
+        Some((mime, bytes)) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "no-cache".to_string())], bytes).into_response(),
         None => (StatusCode::NOT_FOUND, "Unknown asset; call get_design_context or download_assets again").into_response(),
     }
 }
@@ -1031,5 +1101,29 @@ pub async fn serve(bridge: Arc<Bridge>) -> Status {
             Status { url, running: true, error: None }
         }
         Err(e) => Status { url, running: false, error: Some(format!("Port {PORT} is busy: {e}")) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_host;
+    use axum::http::{HeaderMap, HeaderValue, header::HOST};
+
+    fn host(h: &str) -> HeaderMap {
+        let mut m = HeaderMap::new();
+        m.insert(HOST, HeaderValue::from_str(h).unwrap());
+        m
+    }
+
+    #[test]
+    fn assets_are_served_to_this_machine_only() {
+        for ok in ["127.0.0.1:3855", "localhost:3855", "LOCALHOST", "[::1]:3855"] {
+            assert!(local_host(&host(ok)), "{ok}");
+        }
+        // A page that rebinds its own domain to 127.0.0.1 still sends its domain.
+        for bad in ["evil.example:3855", "127.0.0.1.evil.example", "[::2]:3855"] {
+            assert!(!local_host(&host(bad)), "{bad}");
+        }
+        assert!(!local_host(&HeaderMap::new()));
     }
 }

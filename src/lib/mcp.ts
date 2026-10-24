@@ -345,19 +345,31 @@ async function handle(tool: string, args: Record<string, unknown>): Promise<Repl
 /** Answers MCP tool calls from Pergel's built-in server (desktop app only). */
 export async function startMcpBridge() {
   if (!isTauri()) return;
-  await listen<{ id: number; tool: string; args: Record<string, unknown> }>("mcp-request", async (event) => {
-    const { id, tool, args } = event.payload;
+  type Request = { id: number; tool: string; args: Record<string, unknown>; timeoutMs?: number };
+  const answer = async ({ id, tool, args, timeoutMs }: Request, received: number) => {
     let reply: Reply;
-    try {
-      reply = await handle(tool, args ?? {});
-    } catch (e) {
-      reply = { ok: false, error: String(e) };
+    if (timeoutMs && Date.now() - received > timeoutMs - 1000) {
+      // The server already told the agent this call timed out; running it now would surprise it.
+      reply = { ok: false, error: "Skipped: it waited too long behind other calls" };
+    } else {
+      try {
+        reply = await handle(tool, args ?? {});
+      } catch (e) {
+        reply = { ok: false, error: String(e) };
+      }
     }
     // The Agents panel's activity log.
     const target = args?.nodeId ?? (Array.isArray(args?.nodeIds) ? (args.nodeIds as unknown[]).join(", ") : "");
     const detail = reply.ok ? (target ? `layer ${target}` : "") : (reply.error ?? "failed");
     editor.mcpLog = [{ time: Date.now(), tool, ok: reply.ok, detail }, ...editor.mcpLog].slice(0, 200);
-    await invoke("mcp_respond", { id, reply });
+    await invoke("mcp_respond", { id, reply }).catch(() => {});
+  };
+  // One call at a time, in arrival order: several agents (or parallel calls) must not interleave
+  // their edits, and a script's undo step must not take in another call's changes.
+  let queue: Promise<unknown> = Promise.resolve();
+  await listen<Request>("mcp-request", (event) => {
+    const received = Date.now();
+    queue = queue.then(() => answer(event.payload, received));
   });
   editor.mcp = await invoke<McpStatus | null>("mcp_status");
   if (!editor.mcp) setTimeout(async () => (editor.mcp = await invoke<McpStatus | null>("mcp_status")), 1500);

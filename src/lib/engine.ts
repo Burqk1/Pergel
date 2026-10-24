@@ -1,4 +1,12 @@
 export type VarKind = "color" | "number" | "string" | "boolean";
+/** Live collaboration: who last changed each part of the document (Lamport clock, peer id). */
+export type Stamps = Record<string, [number, string]>;
+/** Live collaboration: changed document parts with their old and new values (null: absent). */
+export interface LivePatch {
+  parts: Record<string, [unknown, unknown]>;
+  stamps?: Stamps;
+  images?: Record<string, string>;
+}
 export type VarValue =
   | { kind: "color"; value: number }
   | { kind: "number"; value: number }
@@ -498,6 +506,8 @@ interface Raw {
   _pergel_init(width: number, height: number, dpr: number): number;
   _pergel_load(which: number, count: number): void;
   _pergel_fit(): void;
+  _pergel_view_area(): number;
+  _pergel_view_show(x: number, y: number, w: number, h: number): void;
   _pergel_fit_selection(): void;
   _pergel_resize(width: number, height: number, dpr: number): number;
   _pergel_pan(dx: number, dy: number): void;
@@ -514,6 +524,13 @@ interface Raw {
   _pergel_select_area(x: number, y: number, w: number, h: number, additive: number): void;
   _pergel_begin(): void;
   _pergel_commit(): number;
+  _pergel_abort(): number;
+  _pergel_panics(): number;
+  _pergel_last_panic(): number;
+  _pergel_doc_local_change(): number;
+  _pergel_doc_apply_patch(): number;
+  _pergel_doc_revert(): number;
+  _pergel_doc_merge_live(): number;
   _pergel_undo(): number;
   _pergel_redo(): number;
   _pergel_move_selection(dx: number, dy: number): void;
@@ -705,6 +722,14 @@ export class Engine {
   loadBenchmark(count: number) {
     this.raw._pergel_load(1, count);
   }
+  /** The part of the canvas in view, in world coordinates. */
+  viewArea() {
+    return this.json<[number, number, number, number] | null>(this.raw._pergel_view_area());
+  }
+  /** Shows exactly this area of the canvas, as large as it fits. */
+  viewShow(x: number, y: number, w: number, h: number) {
+    this.raw._pergel_view_show(x, y, w, h);
+  }
   fit() {
     this.raw._pergel_fit();
   }
@@ -755,6 +780,18 @@ export class Engine {
   }
   commit() {
     return this.raw._pergel_commit() === 1;
+  }
+  /** How many engine calls have hit a bug (a panic, caught and rolled back). */
+  panics() {
+    return this.raw._pergel_panics();
+  }
+  /** The last such bug's message. */
+  lastPanic() {
+    return this.json<string>(this.raw._pergel_last_panic());
+  }
+  /** Throws away the innermost open step (opened with `begin`). */
+  abort() {
+    return this.raw._pergel_abort() === 1;
   }
   undo() {
     return this.raw._pergel_undo() === 1;
@@ -931,7 +968,28 @@ export class Engine {
     this.writeText(JSON.stringify({ base, other }));
     return this.json<{ page: string; name: string; change: "added" | "changed" | "deleted" }[]>(this.raw._pergel_doc_diff()) ?? [];
   }
-  /** Live collaboration: three-way merge of documents (per top-level layer). */
+  /** Live collaboration: stamps this peer's changes from `before` to `after` and returns them
+   *  as a patch with old and new values (see core `merge.rs`). */
+  docLocalChange(before: string, after: string, stamps: Stamps, peer: string) {
+    this.writeText(JSON.stringify({ before, after, stamps, peer }));
+    return this.json<{ stamps: Stamps; change: LivePatch } | null>(this.raw._pergel_doc_local_change());
+  }
+  /** Live collaboration: another peer's patch, applied where its stamps are later. */
+  docApplyPatch(local: string, stamps: Stamps, patch: LivePatch) {
+    this.writeText(JSON.stringify({ local, stamps, patch }));
+    return this.json<{ doc: string; stamps: Stamps } | null>(this.raw._pergel_doc_apply_patch());
+  }
+  /** Live collaboration undo: reverts (or redoes) one of this peer's changes where nobody changed it since. */
+  docRevert(current: string, patch: LivePatch, redo: boolean) {
+    this.writeText(JSON.stringify({ current, patch, redo }));
+    return this.json<{ doc: string; changed: number } | null>(this.raw._pergel_doc_revert());
+  }
+  /** Live collaboration: merges another peer's document, each part from the later stamp. */
+  docMergeLive(local: string, localStamps: Stamps, remote: string, remoteStamps: Stamps) {
+    this.writeText(JSON.stringify({ local, localStamps, remote, remoteStamps }));
+    return this.json<{ doc: string; stamps: Stamps; ahead: boolean } | null>(this.raw._pergel_doc_merge_live());
+  }
+  /** Branches: three-way merge of documents (per top-level layer). */
   docMerge(base: string, local: string, remote: string) {
     this.writeText(JSON.stringify({ base, local, remote }));
     return this.json<{ doc: string; ahead: boolean } | null>(this.raw._pergel_doc_merge());

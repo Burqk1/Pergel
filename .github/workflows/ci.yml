@@ -1,0 +1,43 @@
+# Checks every push and pull request: Rust tests and lints (core and desktop app) and the
+# TypeScript / Svelte type check. The WebAssembly engine is built only by the release workflow.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install npm packages
+        run: npm ci
+
+      - name: Type check (svelte-check)
+        run: npm run check
+
+      - name: Figma plugin sandbox
+        run: npm run check:sandbox
+
+      - name: Clippy
+        run: cargo clippy -p pergel-core -p pergel --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test

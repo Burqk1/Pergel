@@ -134,7 +134,7 @@ fn convert_children(group: &usvg::Group, out: &mut Vec<Tree>, images: &mut Image
                 let bb = img.abs_bounding_box();
                 let Some((hash, w, h)) = add_shared(images, bytes) else { continue };
                 let mut t = blank(Kind::Rectangle, if img.id().is_empty() { "Image" } else { img.id() }, Rect::new(bb.x(), bb.y(), bb.width(), bb.height()));
-                t.paint = Some(Paint::Image(ImageFill { hash, mode: ImageMode::Crop, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default() }));
+                t.paint = Some(Paint::Image(ImageFill { hash, mode: ImageMode::Crop, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default(), flip: [false, false] }));
                 t.fill = Color(0xffd9_d9d9);
                 *count += 1;
                 out.push(t);

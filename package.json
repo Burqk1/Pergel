@@ -1,6 +1,6 @@
 {
   "name": "pergel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -8,15 +8,18 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check:sandbox": "node scripts/check-plugin-sandbox.mjs",
     "wasm": "node scripts/build-wasm.mjs",
     "wasm:dev": "node scripts/build-wasm.mjs --dev",
     "tauri": "tauri"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",
+    "@jitl/quickjs-singlefile-browser-release-sync": "0.32.0",
     "@lucide/svelte": "^1.58.0",
     "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-dialog": "^2.8.3"
+    "@tauri-apps/plugin-dialog": "^2.8.3",
+    "quickjs-emscripten-core": "0.32.0"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.1.2",

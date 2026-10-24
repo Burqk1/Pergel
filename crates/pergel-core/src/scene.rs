@@ -994,7 +994,9 @@ impl Scene {
     }
 
     /// Mirrors a layer and its contents across the vertical (or horizontal) line through the
-    /// pivot. Shapes are symmetric, so mirroring moves them and negates their rotation.
+    /// pivot: every layer moves to its mirrored place with its rotation negated, and what isn't
+    /// symmetric in its box is mirrored too (vector outlines, corner radii, per-side strokes,
+    /// gradients, images, shadow offsets). Text keeps reading the right way round.
     pub fn flip(&mut self, id: NodeId, horizontal: bool, pivot: f32) {
         let Some(parent) = self.node(id).map(|n| n.parent) else { return };
         let ids = self.subtree(id);
@@ -1008,6 +1010,7 @@ impl Scene {
             let bounds = n.bounds.centered(nx, ny);
             let rotation = normalize_degrees(-n.rotation);
             self.set_geometry_raw(*i, bounds, rotation);
+            self.update(*i, |n| mirror_contents(n, horizontal));
         }
         self.refit_inside(&ids);
         self.changed(false);
@@ -1171,6 +1174,58 @@ mod constraint_tests {
     }
 }
 
+/// The parts of a layer that aren't symmetric in its box, mirrored in place (see
+/// [`Scene::flip`]).
+fn mirror_contents(n: &mut Node, horizontal: bool) {
+    fn paint(p: &mut Paint, horizontal: bool) {
+        match p {
+            Paint::Gradient(g) => {
+                let m = |(x, y): (f32, f32)| if horizontal { (1.0 - x, y) } else { (x, 1.0 - y) };
+                g.from = m(g.from);
+                g.to = m(g.to);
+                // The gradient's second axis turns the other way round in a mirror; only an
+                // angular gradient shows it (it sweeps the other way).
+                if g.kind == crate::paint::GradientKind::Angular {
+                    g.width = -g.width;
+                }
+            }
+            Paint::Image(img) => img.flip[usize::from(!horizontal)] ^= true,
+        }
+    }
+    if let Some(v) = n.vector.as_deref_mut() {
+        let (w, h) = v.size;
+        v.d = crate::paint::map_path(&v.d, |x, y| if horizontal { (w - x, y) } else { (x, h - y) });
+    }
+    // Corners are top-left, top-right, bottom-right, bottom-left; sides top, right, bottom, left.
+    if let Some(c) = n.corners.as_mut() {
+        *c = if horizontal { [c[1], c[0], c[3], c[2]] } else { [c[3], c[2], c[1], c[0]] };
+    }
+    if let Some(s) = n.sides.as_mut() {
+        if horizontal {
+            s.swap(1, 3);
+        } else {
+            s.swap(0, 2);
+        }
+    }
+    if let Some(p) = n.paint.as_deref_mut() {
+        paint(p, horizontal);
+    }
+    for f in &mut n.extra_fills {
+        if let Some(p) = f.paint.as_mut() {
+            paint(p, horizontal);
+        }
+    }
+    for e in &mut n.effects {
+        if let Effect::DropShadow { x, y, .. } | Effect::InnerShadow { x, y, .. } = e {
+            if horizontal {
+                *x = -*x;
+            } else {
+                *y = -*y;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1327,6 +1382,39 @@ pub(crate) mod tests {
         scene.flip(f, true, 0.0);
         assert_eq!(scene.node(f).unwrap().rotation, -90.0);
         assert!((scene.node(a).unwrap().bounds.center().0 + 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn flipping_mirrors_what_is_not_symmetric() {
+        use crate::paint::{Gradient, GradientKind, ImageFill, ImageMode, VectorPath};
+        let mut scene = Scene::default();
+        let mut v = Node::new(Kind::Vector, "Arrow", Rect::new(0.0, 0.0, 10.0, 10.0), Color(0));
+        v.vector = Some(Box::new(VectorPath { d: "M0 0L10 5L0 10Z".into(), size: (10.0, 10.0), even_odd: false, cap: Default::default(), join: Default::default(), start: Default::default(), end: Default::default() }));
+        let v = scene.add(v);
+        let mut r = rect("Card", 20.0, 0.0, 10.0, 10.0);
+        r.corners = Some([1.0, 2.0, 3.0, 4.0]);
+        r.sides = Some([1.0, 2.0, 3.0, 4.0]);
+        r.effects = vec![Effect::DropShadow { color: Color(0), x: 4.0, y: 2.0, blur: 0.0, spread: 0.0, visible: true }];
+        r.paint = Some(Box::new(Paint::Gradient(Gradient { kind: GradientKind::Angular, stops: Vec::new(), from: (0.2, 0.5), to: (0.9, 0.5), width: 1.0 })));
+        let r = scene.add(r);
+        let mut i = rect("Photo", 40.0, 0.0, 10.0, 10.0);
+        i.paint = Some(Box::new(Paint::Image(ImageFill { hash: String::new(), mode: ImageMode::Fill, width: 1, height: 1, scale: 1.0, opacity: 1.0, adjust: Default::default(), flip: [false, false] })));
+        let i = scene.add(i);
+
+        scene.flip(v, true, 5.0);
+        assert_eq!(scene.node(v).unwrap().vector.as_ref().unwrap().d, "M10 0L0 5L10 10Z");
+        scene.flip(r, true, 25.0);
+        let n = scene.node(r).unwrap();
+        assert_eq!(n.corners, Some([2.0, 1.0, 4.0, 3.0]));
+        assert_eq!(n.sides, Some([1.0, 4.0, 3.0, 2.0]));
+        assert!(matches!(n.effects[0], Effect::DropShadow { x: -4.0, y: 2.0, .. }));
+        let Some(Paint::Gradient(g)) = n.paint.as_deref() else { panic!() };
+        assert!((g.from.0 - 0.8).abs() < 1e-6 && (g.to.0 - 0.1).abs() < 1e-6 && g.width == -1.0);
+        scene.flip(r, false, 5.0);
+        assert_eq!(scene.node(r).unwrap().corners, Some([3.0, 4.0, 1.0, 2.0]));
+        scene.flip(i, false, 5.0);
+        let Some(Paint::Image(img)) = scene.node(i).unwrap().paint.as_deref() else { panic!() };
+        assert_eq!(img.flip, [false, true]);
     }
 
     #[test]

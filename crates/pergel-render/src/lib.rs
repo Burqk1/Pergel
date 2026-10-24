@@ -459,6 +459,12 @@ impl Renderer {
         let (iw, ih) = (image.width() as f32, image.height() as f32);
         canvas.save();
         canvas.clip_path(&shape_path(node, rect, 0.0), ClipOp::Intersect, true);
+        if img.flip[0] || img.flip[1] {
+            let (cx, cy) = (rect.center_x(), rect.center_y());
+            canvas.translate((cx, cy));
+            canvas.scale((if img.flip[0] { -1.0 } else { 1.0 }, if img.flip[1] { -1.0 } else { 1.0 }));
+            canvas.translate((-cx, -cy));
+        }
         let sampling = SamplingOptions::new(skia_safe::FilterMode::Linear, skia_safe::MipmapMode::Linear);
         match img.mode {
             ImageMode::Tile => {
@@ -640,6 +646,13 @@ pub fn stroke_outline(node: &Node) -> Option<Path> {
 thread_local! {
     /// Parsed vector outlines by path data; vectors are drawn every frame.
     static PATHS: RefCell<HashMap<String, Path>> = RefCell::new(HashMap::new());
+    /// Diamond gradients: Skia has no built-in one, so `t = |u| + |v|` in the gradient's unit
+    /// space looks the stops up in a horizontal linear gradient.
+    static DIAMOND: Option<skia_safe::RuntimeEffect> = skia_safe::RuntimeEffect::make_for_shader(
+        "uniform shader stops; half4 main(float2 p) { return stops.eval(float2(abs(p.x) + abs(p.y), 0.5)); }",
+        None,
+    )
+    .ok();
 }
 
 /// A vector layer's outline stretched into `rect`.
@@ -684,6 +697,13 @@ fn gradient_shader(g: &pergel_core::Gradient, rect: Rect) -> Option<Shader> {
             let m = Matrix::concat(&unit, &ellipse);
             if kind == GradientKind::Angular {
                 gradient::shaders::sweep_gradient((0.0, 0.0), (0.0, 360.0), &grad, &m)
+            } else if kind == GradientKind::Diamond
+                && let Some(diamond) = DIAMOND.with(|d| {
+                    let stops = gradient::shaders::linear_gradient(((0.0, 0.0), (1.0, 0.0)), &grad, None::<&Matrix>)?;
+                    d.as_ref()?.make_shader(skia_safe::Data::new_empty(), &[stops.into()], &m)
+                })
+            {
+                Some(diamond)
             } else {
                 gradient::shaders::radial_gradient(((0.0, 0.0), 1.0), &grad, &m)
             }

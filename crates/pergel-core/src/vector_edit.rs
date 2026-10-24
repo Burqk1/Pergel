@@ -45,10 +45,10 @@ pub fn parse_path(d: &str) -> Vec<SubPath> {
             tokens.push(Tok::Cmd(ch));
         } else if ch == ',' || ch.is_whitespace() {
             flush(&mut num, &mut tokens);
-        } else if ch == '-' && !num.is_empty() && !num.ends_with(['e', 'E']) {
-            flush(&mut num, &mut tokens);
-            num.push(ch);
-        } else if ch == '.' && num.contains('.') && !num.contains(['e', 'E']) {
+        } else if (ch == '-' && !num.is_empty() && !num.ends_with(['e', 'E']))
+            || (ch == '.' && num.contains('.') && !num.contains(['e', 'E']))
+        {
+            // A sign or a second decimal point starts the next number.
             flush(&mut num, &mut tokens);
             num.push(ch);
         } else {

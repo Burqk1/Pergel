@@ -5,7 +5,12 @@ Cursor…) can look at the design you have open, implement it as code, and edit 
 
 - Address: `http://127.0.0.1:3855/mcp` (Streamable HTTP, local only; requests whose `Host` is not
   `localhost`, `127.0.0.1` or `::1` are rejected, which guards against DNS rebinding).
-- Asset files: `http://127.0.0.1:3855/assets/<file>` (icons and images from the last design read).
+- Asset files: `http://127.0.0.1:3855/assets/<file>` (icons and images from the last design read),
+  served to this machine only.
+- Disk access: agents pass absolute paths (an `assets_dir`, image and SVG files, a screenshot, a
+  project to scan). The first time an agent reaches a folder, Pergel asks whether to allow it; the
+  answer holds until Pergel quits. Calls are answered one at a time, and a call that fails
+  changes nothing.
 - Main menu → **Copy Claude Code setup command** copies:
 
   ```sh
@@ -59,7 +64,7 @@ images. Pergel prevents that:
 | `get_comments` / `add_comment` / `resolve_comment` | Comment threads as a to-do list: read them, reply as Claude, resolve them. |
 | `get_libraries` / `use_library_component` / `publish_library` | Team libraries: what is published, place a library component (it stays linked for updates), publish this file's components. |
 | `create_new_file` | Opens a new, empty design file in a new tab, so a new design doesn't touch the user's open file. |
-| `run_script` | Runs JavaScript against the document (like Figma's `use_figma`): `pergel.selection()`, `create(specs)`, `update(id, props)`, `remove(ids)`, `tool(name, args)`… Sandboxed in a worker; one undo step; console output and the return value come back. |
+| `run_script` | Runs JavaScript against the document (like Figma's `use_figma`): `pergel.selection()`, `create(specs)`, `update(id, props)`, `remove(ids)`, `tool(name, args)`… Sandboxed in a worker; one undo step, and nothing changes if it throws; console output and the return value come back. |
 | `get_code_connect_suggestions` | Scans a codebase (`.tsx`/`.jsx`/`.vue`/`.svelte`, cva variants included) and proposes `add_code_connect_map` calls for the file's components, with variant → prop mappings. |
 | `generate_diagram` | Mermaid flowchart → editable shapes, labels and arrows in ranked layout (`graph TD`/`LR`, `[ ]`, `( )`, `{ }`, `([ ])`, `(( ))`, `-->`, `---`, `-.->`, `==>`, `-->|label|`, `A & B`). |
 | `get_components` | Main components (instance counts, variant values) and component sets with their properties. |
@@ -68,7 +73,7 @@ images. Pergel prevents that:
 
 ## Editing
 
-Every edit is one undo step in Pergel.
+Every edit is one undo step in Pergel. A call that fails changes nothing: its partial edits are rolled back.
 
 | Tool | Does |
 |---|---|

@@ -335,6 +335,25 @@ thread_local! {
     static ENGINE: RefCell<Option<Engine>> = const { RefCell::new(None) };
     static OUT: RefCell<CString> = RefCell::new(CString::default());
     static TEXT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    /// Panics caught in calls so far, and the last one's message (see `with_engine`).
+    static PANICS: RefCell<(u32, String)> = const { RefCell::new((0, String::new())) };
+}
+
+/// Records each panic's message for the UI (the default hook still logs it to the console).
+fn install_panic_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let what = info.payload().downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| info.payload().downcast_ref::<String>().cloned()).unwrap_or_default();
+            let at = info.location().map(|l| format!(" ({}:{})", l.file(), l.line())).unwrap_or_default();
+            PANICS.with_borrow_mut(|p| {
+                p.0 += 1;
+                p.1 = format!("{what}{at}");
+            });
+            default(info);
+        }));
+    });
 }
 
 fn make_surface(context: &mut DirectContext, width: i32, height: i32) -> Option<Surface> {
@@ -350,8 +369,31 @@ fn make_surface(context: &mut DirectContext, width: i32, height: i32) -> Option<
     )
 }
 
+/// Runs a call against the engine. A bug that panics inside it doesn't stop the canvas: the
+/// call returns nothing, what it changed is rolled back, and the UI reports it.
 fn with_engine<T>(f: impl FnOnce(&mut Engine) -> T) -> Option<T> {
-    ENGINE.with_borrow_mut(|engine| engine.as_mut().map(f))
+    ENGINE.with_borrow_mut(|engine| {
+        let e = engine.as_mut()?;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&mut *e))) {
+            Ok(out) => Some(out),
+            Err(_) => {
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.recover()));
+                None
+            }
+        }
+    })
+}
+
+/// How many calls have panicked (the UI polls this to report them).
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_panics() -> u32 {
+    PANICS.with_borrow(|p| p.0)
+}
+
+/// The last panic's message.
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_last_panic() -> *const c_char {
+    emit(Some(serde_json::Value::String(PANICS.with_borrow(|p| p.1.clone())).to_string()))
 }
 
 fn emit(json: Option<String>) -> *const c_char {
@@ -1131,6 +1173,17 @@ impl Engine {
         out
     }
 
+    /// After a panic inside a call: throws away what the open steps had changed and the gesture
+    /// in progress, so the document is as before the call and the editor keeps working.
+    fn recover(&mut self) {
+        while let Some(selection) = self.scene.abort() {
+            self.selection = selection;
+        }
+        self.drag = None;
+        self.moving = None;
+        self.prune_selection();
+    }
+
     fn prune_selection(&mut self) {
         let scene = &self.scene;
         self.selection.retain(|id| scene.node(*id).is_some());
@@ -1210,6 +1263,7 @@ impl Engine {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn pergel_init(width: i32, height: i32, dpr: f32) -> i32 {
+    install_panic_hook();
     if unsafe { pergel_gl_create(CANVAS_SELECTOR.as_ptr()) } <= 0 {
         return -1;
     }
@@ -1648,6 +1702,88 @@ pub extern "C" fn pergel_doc_merge() -> *const c_char {
         let (base, local, remote) = (Document::parse(&r.base).ok()?, Document::parse(&r.local).ok()?, Document::parse(&r.remote).ok()?);
         let (doc, ahead) = pergel_core::merge_documents(&base, &local, &remote);
         Some(serde_json::json!({ "doc": serde_json::to_string(&doc).ok()?, "ahead": ahead }).to_string())
+    })();
+    emit(out)
+}
+
+/// Live collaboration: this peer's own changes from `before` to `after`. `text()` holds
+/// `{before, after, stamps, peer}`; stamps the changed parts and returns `{stamps, change}` (a
+/// patch with the old and new values, for undo and, without the old ones, to send).
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_doc_local_change() -> *const c_char {
+    #[derive(Deserialize)]
+    struct Req {
+        before: String,
+        after: String,
+        stamps: pergel_core::Stamps,
+        peer: String,
+    }
+    let out = (|| {
+        let mut r: Req = serde_json::from_str(&text()).ok()?;
+        let (before, after) = (Document::parse(&r.before).ok()?, Document::parse(&r.after).ok()?);
+        pergel_core::stamp_changes(&before, &after, &mut r.stamps, &r.peer);
+        let change = pergel_core::diff_parts(&before, &after, &r.stamps, true);
+        Some(serde_json::json!({ "stamps": r.stamps, "change": change }).to_string())
+    })();
+    emit(out)
+}
+
+/// Live collaboration: another peer's patch applied where its stamps are later. `text()` holds
+/// `{local, stamps, patch}`; returns `{doc, stamps}`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_doc_apply_patch() -> *const c_char {
+    #[derive(Deserialize)]
+    struct Req {
+        local: String,
+        stamps: pergel_core::Stamps,
+        patch: pergel_core::Patch,
+    }
+    let out = (|| {
+        let r: Req = serde_json::from_str(&text()).ok()?;
+        let local = Document::parse(&r.local).ok()?;
+        let (doc, stamps) = pergel_core::apply_patch(&local, &r.stamps, &r.patch);
+        Some(serde_json::json!({ "doc": serde_json::to_string(&doc).ok()?, "stamps": stamps }).to_string())
+    })();
+    emit(out)
+}
+
+/// Live collaboration undo: reverts (or with `redo`, re-applies) one of this peer's changes in
+/// `current`, leaving parts others changed since. `text()` holds `{current, patch, redo}`;
+/// returns `{doc, changed}`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_doc_revert() -> *const c_char {
+    #[derive(Deserialize)]
+    struct Req {
+        current: String,
+        patch: pergel_core::Patch,
+        redo: bool,
+    }
+    let out = (|| {
+        let r: Req = serde_json::from_str(&text()).ok()?;
+        let current = Document::parse(&r.current).ok()?;
+        let (doc, changed) = pergel_core::revert_patch(&current, &r.patch, r.redo);
+        Some(serde_json::json!({ "doc": serde_json::to_string(&doc).ok()?, "changed": changed }).to_string())
+    })();
+    emit(out)
+}
+
+/// Live collaboration: merges another peer's document by stamps. `text()` holds
+/// `{local, localStamps, remote, remoteStamps}`; returns `{doc, stamps, ahead}`.
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_doc_merge_live() -> *const c_char {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Req {
+        local: String,
+        local_stamps: pergel_core::Stamps,
+        remote: String,
+        remote_stamps: pergel_core::Stamps,
+    }
+    let out = (|| {
+        let r: Req = serde_json::from_str(&text()).ok()?;
+        let (local, remote) = (Document::parse(&r.local).ok()?, Document::parse(&r.remote).ok()?);
+        let (doc, stamps, ahead) = pergel_core::merge_stamped(&local, &r.local_stamps, &remote, &r.remote_stamps);
+        Some(serde_json::json!({ "doc": serde_json::to_string(&doc).ok()?, "stamps": stamps, "ahead": ahead }).to_string())
     })();
     emit(out)
 }
@@ -2466,6 +2602,22 @@ pub extern "C" fn pergel_fit() {
     with_engine(|e| e.view.fit(e.scene.bounds(), FIT_MARGIN));
 }
 
+/// The part of the canvas in view, in world coordinates: `[x, y, w, h]` (live sessions share it
+/// so others can follow along).
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_view_area() -> *const c_char {
+    emit(with_engine(|e| {
+        let a = e.view.world_area();
+        serde_json::json!([a.x, a.y, a.w, a.h]).to_string()
+    }))
+}
+
+/// Shows exactly this area of the canvas, as large as it fits (following someone's view).
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_view_show(x: f32, y: f32, w: f32, h: f32) {
+    with_engine(|e| e.view.fit(Rect::new(x, y, w, h), 0.0));
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn pergel_fit_selection() {
     with_engine(|e| {
@@ -2690,6 +2842,16 @@ pub extern "C" fn pergel_commit() -> i32 {
         e.prune_selection();
         let selection = e.selection.clone();
         e.scene.commit(&selection) as i32
+    })
+    .unwrap_or(0)
+}
+
+/// Throws away the innermost open step (see [`Scene::abort`]); a failed script undoes itself.
+#[unsafe(no_mangle)]
+pub extern "C" fn pergel_abort() -> i32 {
+    with_engine(|e| {
+        let selection = e.scene.abort();
+        e.restore_selection(selection)
     })
     .unwrap_or(0)
 }
@@ -4070,7 +4232,7 @@ pub extern "C" fn pergel_place_image(sx: f32, sy: f32, name_len: usize) -> i32 {
         let k = (area.w * 0.66 / w as f32).min(area.h * 0.66 / h as f32).min(1.0);
         let (bw, bh) = ((w as f32 * k).round().max(1.0), (h as f32 * k).round().max(1.0));
         let mut node = Node::new(Kind::Rectangle, if name.is_empty() { "Image".to_string() } else { name }, Rect::new(0.0, 0.0, bw, bh), DEFAULT_FILL);
-        node.paint = Some(Box::new(Paint::Image(ImageFill { hash, mode: ImageMode::Fill, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default() })));
+        node.paint = Some(Box::new(Paint::Image(ImageFill { hash, mode: ImageMode::Fill, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default(), flip: [false, false] })));
         let mut scratch = Scene::default();
         let id = scratch.insert(node, None, None);
         let Some(tree) = scratch.extract(id) else { return -1 };
@@ -4095,7 +4257,7 @@ pub extern "C" fn pergel_set_image() -> u32 {
                         Some(Paint::Image(old)) => old.mode,
                         _ => ImageMode::Fill,
                     };
-                    n.paint = Some(Box::new(Paint::Image(ImageFill { hash, mode, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default() })));
+                    n.paint = Some(Box::new(Paint::Image(ImageFill { hash, mode, width: w, height: h, scale: 1.0, opacity: 1.0, adjust: Default::default(), flip: [false, false] })));
                     n.fill_on = true;
                 });
             }
@@ -5999,13 +6161,22 @@ impl Engine {
                 result.map(|_| json!({ "updated": self.summary(id) }))
             }
             "delete_nodes" => {
-                let ids: Vec<NodeId> =
-                    arg_ids(args, "nodeIds").into_iter().filter(|id| !self.scene.in_instance(*id)).collect();
+                let (ids, inside): (Vec<NodeId>, Vec<NodeId>) = arg_ids(args, "nodeIds").into_iter().partition(|id| !self.scene.in_instance(*id));
+                let missing: Vec<NodeId> = ids.iter().copied().filter(|id| self.scene.node(*id).is_none()).collect();
                 let n = self.step(|e| {
                     let ids = e.scene.outermost(&ids);
                     ids.into_iter().filter(|id| e.scene.remove(*id)).count()
                 });
-                Ok(json!({ "deleted": n }))
+                let mut warnings = Vec::new();
+                if !inside.is_empty() {
+                    let list: Vec<String> = inside.iter().map(|id| id.to_string()).collect();
+                    warnings.push(format!("Skipped {} (inside an instance; hide it with update_node {{visible: false}} or edit the main component)", list.join(", ")));
+                }
+                if !missing.is_empty() {
+                    let list: Vec<String> = missing.iter().map(|id| id.to_string()).collect();
+                    warnings.push(format!("No layer with id {}", list.join(", ")));
+                }
+                Ok(if warnings.is_empty() { json!({ "deleted": n }) } else { json!({ "deleted": n, "warnings": warnings }) })
             }
             "select_nodes" => {
                 let ids: Vec<NodeId> = arg_ids(args, "nodeIds").into_iter().filter(|id| self.scene.node(*id).is_some()).collect();
@@ -6059,7 +6230,32 @@ pub extern "C" fn pergel_agent() -> *const c_char {
     let tool = request.get("tool").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let args = request.get("args").cloned().unwrap_or_else(|| serde_json::json!({}));
     emit(with_engine(|e| {
-        let reply = match e.agent(&tool, &args) {
+        // A call runs as one step that is thrown away when it fails, so an error never leaves
+        // half a change behind. Inside a script it is a step of its own within the script's.
+        // Switching pages swaps the scene, so that call stays outside.
+        let atomic = tool != "switch_page";
+        if atomic {
+            let before = e.selection.clone();
+            e.scene.begin(&before);
+        }
+        let result = e.agent(&tool, &args);
+        if atomic {
+            match &result {
+                Ok(_) => {
+                    if !e.scene.touched().is_empty() {
+                        e.settle();
+                        e.prune_selection();
+                    }
+                    let after = e.selection.clone();
+                    e.scene.commit(&after);
+                }
+                Err(_) => {
+                    let selection = e.scene.abort();
+                    e.restore_selection(selection);
+                }
+            }
+        }
+        let reply = match result {
             Ok(result) => serde_json::json!({ "ok": true, "result": result }),
             Err(error) => serde_json::json!({ "ok": false, "error": error }),
         };

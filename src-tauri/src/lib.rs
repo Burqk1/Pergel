@@ -1,3 +1,4 @@
+mod access;
 mod code_scan;
 mod live;
 mod files;
@@ -31,6 +32,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(files::Store::default())
+        .manage(files::Picked::default())
         .setup(|app| {
             let bridge = Arc::new(mcp::Bridge::new(app.handle().clone()));
             app.manage(McpState { bridge: bridge.clone(), status: Mutex::new(None) });
@@ -61,6 +63,7 @@ pub fn run() {
             files::file_import,
             files::file_export,
             files::write_file,
+            files::pick_path,
             files::file_versions,
             files::file_version_save,
             files::file_version_read,

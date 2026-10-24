@@ -205,7 +205,9 @@ export function runScript(code: string, onLog?: (line: string) => void, timeout 
       clearTimeout(timer);
       worker.terminate();
       URL.revokeObjectURL(url);
-      engine.commit();
+      // All or nothing: a script that fails or times out leaves the document as it was.
+      if (r.ok) engine.commit();
+      else engine.abort();
       editor.refreshAll();
       resolve({ ...r, logs, ms: Math.round(performance.now() - started) });
     };
@@ -219,6 +221,7 @@ export function runScript(code: string, onLog?: (line: string) => void, timeout 
       } else if (m.type === "done") {
         finish({ ok: !!m.ok, result: m.result, error: m.error });
       } else if (m.type === "call") {
+        if (finished) return;
         let reply: { ok: boolean; result?: unknown; error?: string };
         try {
           if (m.method === "notify") {

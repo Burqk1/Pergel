@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { editor } from "./editor.svelte";
-import { saveAs } from "./files";
+import { pickPath, saveAs } from "./files";
 import { workspace } from "./workspace.svelte";
 
 // Slides and Sites, Pergel-style: a deck is a file of 16:9 frames (Present plays it, one PDF
@@ -130,9 +130,8 @@ export async function publishSite() {
   });
   for (const [file, data] of assets) files.push({ path: `assets/${file}`, base64: data });
   if (isTauri()) {
-    const { open } = await import("@tauri-apps/plugin-dialog");
-    const dir = await open({ directory: true, title: "Folder for the site" });
-    if (!dir || Array.isArray(dir)) return;
+    const dir = await pickPath("folder", { title: "Folder for the site" });
+    if (!dir) return;
     const sep = dir.includes("\\") ? "\\" : "/";
     for (const f of files) await invoke("write_file", { path: `${dir}${sep}${f.path.replace(/\//g, sep)}`, base64: f.base64 ?? null, text: f.text ?? null });
     editor.notify(`Published ${list.length} page${list.length === 1 ? "" : "s"} to ${dir}`);
